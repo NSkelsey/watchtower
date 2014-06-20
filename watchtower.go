@@ -3,7 +3,7 @@
 	configurable parsers that do interesting things with that output.
 	The data flow looks like this:
     nodeHandler->------------> blockParser->----
-		          \		    					\
+                  \                              \
                    ------------------------------->txParser
 */
 
@@ -18,12 +18,13 @@ import (
 	"github.com/conformal/btcwire"
 )
 
-var btcnet = btcwire.TestNet3
+var btcnet btcwire.BitcoinNet
 var logger = log.New(os.Stdout, "", log.Ltime)
 
 type TxMeta struct {
 	MsgTx    *btcwire.MsgTx
 	BlockSha []byte
+	Time     time.Time
 }
 
 func init() {
@@ -89,8 +90,8 @@ func nodeHandler(addr string, txStream chan<- *TxMeta, blockStream chan<- *btcwi
 	}
 }
 
-func Create(txParser func(*TxMeta), blockParser func(*btcwire.MsgBlock)) {
-	addr := "127.0.0.1:18333"
+func Create(addr string, net btcwire.BitconNet, txParser func(*TxMeta), blockParser func(*btcwire.MsgBlock)) {
+	btcnet = net
 
 	txStream := make(chan *TxMeta, 5e3)
 	blockStream := make(chan *btcwire.MsgBlock)

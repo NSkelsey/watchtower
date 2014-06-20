@@ -20,13 +20,5 @@ class Block(Base):
     hash     = Column(String, primary_key=True)
     prevhash = Column(String)
 
-class Enum(Base):
-    __tablename__ = "enmuyasd"
-
-    id      = Column(String, primary_key=True)
-    enum    = Column(Enum("blah", "foo"))
-    spent      = Column(Boolean)
-    value   = Column(Integer)
-
 if __name__ == "__main__":
     Base.metadata.create_all(engine)
