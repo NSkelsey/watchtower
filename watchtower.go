@@ -27,18 +27,14 @@ type TxMeta struct {
 	Time     time.Time
 }
 
-func init() {
-	logger.Println("Processing config...")
-}
-
-func nodeHandler(addr string, txStream chan<- *TxMeta, blockStream chan<- *btcwire.MsgBlock) {
+func nodeHandler(addr string, height int64, txStream chan<- *TxMeta, blockStream chan<- *btcwire.MsgBlock) {
 	logger.Println("Connecting to: ", addr)
 	conn := setupConn(addr)
 	pver := btcwire.ProtocolVersion
 	read, write := composeConnOuts(conn, pver, btcnet, logger)
 
 	// Initial handshake
-	ver_m, _ := btcwire.NewMsgVersionFromConn(conn, genNonce(), 0)
+	ver_m, _ := btcwire.NewMsgVersionFromConn(conn, genNonce(), int32(height))
 	ver_m.AddUserAgent("Watchtower", "0.0.0")
 	write(ver_m)
 	// Wait for responses
@@ -67,7 +63,6 @@ func nodeHandler(addr string, txStream chan<- *TxMeta, blockStream chan<- *btcwi
 	// listen for txs + blocks then pushes into streams
 	for {
 		msg := read()
-		logger.Println(msg.Command())
 		switch msg := msg.(type) {
 		case *btcwire.MsgInv:
 			want := btcwire.NewMsgGetData()
@@ -90,8 +85,14 @@ func nodeHandler(addr string, txStream chan<- *TxMeta, blockStream chan<- *btcwi
 	}
 }
 
-func Create(addr string, net btcwire.BitconNet, txParser func(*TxMeta), blockParser func(*btcwire.MsgBlock)) {
-	btcnet = net
+type TowerCfg struct {
+	Addr        string
+	Net         btcwire.BitcoinNet
+	StartHeight int64
+}
+
+func Create(cfg TowerCfg, net btcwire.BitcoinNet, txParser func(*TxMeta), blockParser func(time.Time, *btcwire.MsgBlock)) {
+	btcnet = cfg.Net
 
 	txStream := make(chan *TxMeta, 5e3)
 	blockStream := make(chan *btcwire.MsgBlock)
@@ -100,7 +101,7 @@ func Create(addr string, net btcwire.BitconNet, txParser func(*TxMeta), blockPar
 
 	go txParserWrapper(txParser, txStream)
 
-	nodeHandler(addr, txStream, blockStream)
+	nodeHandler(cfg.Addr, cfg.StartHeight, txStream, blockStream)
 }
 
 // Utility functions

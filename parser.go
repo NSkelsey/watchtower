@@ -9,17 +9,18 @@ import (
 
 var conn *sqlite3.Conn
 
-func blockParserWrapper(blockParser func(*btcwire.MsgBlock), blockStream <-chan *btcwire.MsgBlock, txStream chan<- *TxMeta) {
+func blockParserWrapper(blockParser func(time.Time, *btcwire.MsgBlock), blockStream <-chan *btcwire.MsgBlock, txStream chan<- *TxMeta) {
 	for {
 		block := <-blockStream
-		blockParser(block)
+		now := time.Now()
+		blockParser(now, block)
 		hash, _ := block.BlockSha()
 		bytes := hash.Bytes()
 		for _, tx := range block.Transactions {
 			meta := TxMeta{
 				MsgTx:    tx,
 				BlockSha: bytes,
-				Time:     time.Now()}
+				Time:     now}
 			txStream <- &meta
 		}
 	}
