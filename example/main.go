@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/NSkelsey/watchtower"
 	"github.com/conformal/btcscript"
@@ -32,7 +33,7 @@ func main() {
 // example parsers
 
 // The block parser only logs stores blocks as they come in
-func blockParser(block *btcwire.MsgBlock) {
+func blockParser(now time.Time, block *btcwire.MsgBlock) {
 	_hash, _ := block.BlockSha()
 	hash := _hash.String()
 	log.Println(hash)
