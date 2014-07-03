@@ -74,7 +74,7 @@ func nodeHandler(addr string, height int64, txStream chan<- *TxMeta, blockStream
 			write(want)
 		case *btcwire.MsgTx:
 			var empt []byte // evaluates to nil
-			meta := TxMeta{MsgTx: msg, BlockSha: empt}
+			meta := TxMeta{MsgTx: msg, BlockSha: empt, Time: time.Now()}
 			txStream <- &meta
 		case *btcwire.MsgBlock:
 			blockStream <- msg
@@ -88,10 +88,10 @@ func nodeHandler(addr string, height int64, txStream chan<- *TxMeta, blockStream
 type TowerCfg struct {
 	Addr        string
 	Net         btcwire.BitcoinNet
-	StartHeight int64
+	StartHeight int
 }
 
-func Create(cfg TowerCfg, net btcwire.BitcoinNet, txParser func(*TxMeta), blockParser func(time.Time, *btcwire.MsgBlock)) {
+func Create(cfg TowerCfg, txParser func(*TxMeta), blockParser func(time.Time, *btcwire.MsgBlock)) {
 	btcnet = cfg.Net
 
 	txStream := make(chan *TxMeta, 5e3)
@@ -101,7 +101,7 @@ func Create(cfg TowerCfg, net btcwire.BitcoinNet, txParser func(*TxMeta), blockP
 
 	go txParserWrapper(txParser, txStream)
 
-	nodeHandler(cfg.Addr, cfg.StartHeight, txStream, blockStream)
+	nodeHandler(cfg.Addr, int64(cfg.StartHeight), txStream, blockStream)
 }
 
 // Utility functions
