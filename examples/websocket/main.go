@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	addr   = flag.String("addr", ":1034", "http service address")
-	btcnet = flag.String("net", "TestNet3", "http service address")
+	addr     = flag.String("addr", ":1034", "http service address")
+	btcnet   = flag.String("net", "TestNet3", "Which network params to use")
+	nodeaddr = flag.String("nodeaddr", "127.0.0.1:18333", "The node to connect to")
 )
 
 // Main does 3 things.
@@ -31,9 +32,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	nodeaddr := "127.0.0.1:" + net.DefaultPort
 	cfg := watchtower.TowerCfg{
-		Addr:        nodeaddr,
+		Addr:        *nodeaddr,
 		Net:         net.Net,
 		StartHeight: 0,
 	}
