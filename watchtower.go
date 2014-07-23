@@ -27,7 +27,7 @@ type TxMeta struct {
 	Time     time.Time
 }
 
-func nodeHandler(addr string, height int64, txStream chan<- *TxMeta, blockStream chan<- *btcwire.MsgBlock) {
+func nodeHandler(addr string, height int64, toSend []btcwire.Message, txStream chan<- *TxMeta, blockStream chan<- *btcwire.MsgBlock) {
 	logger.Println("Connecting to: ", addr)
 	conn := setupConn(addr)
 	pver := btcwire.ProtocolVersion
@@ -60,6 +60,19 @@ func nodeHandler(addr string, height int64, txStream chan<- *TxMeta, blockStream
 		}
 	}
 	logger.Println("Conn Negotiated")
+
+	// If there are msgs to send. Send them first
+	if len(toSend) > 0 {
+		s := "Sending cmds:"
+		for _, msg := range toSend {
+			s += " " + msg.Command()
+		}
+		logger.Println(s)
+	}
+	for _, msg := range toSend {
+		write(msg)
+	}
+
 	// listen for txs + blocks then pushes into streams
 	for {
 		msg := read()
@@ -89,6 +102,7 @@ type TowerCfg struct {
 	Addr        string
 	Net         btcwire.BitcoinNet
 	StartHeight int
+	ToSend      []btcwire.Message
 }
 
 func Create(cfg TowerCfg, txParser func(*TxMeta), blockParser func(time.Time, *btcwire.MsgBlock)) {
@@ -101,7 +115,7 @@ func Create(cfg TowerCfg, txParser func(*TxMeta), blockParser func(time.Time, *b
 
 	go txParserWrapper(txParser, txStream)
 
-	nodeHandler(cfg.Addr, int64(cfg.StartHeight), txStream, blockStream)
+	nodeHandler(cfg.Addr, int64(cfg.StartHeight), cfg.ToSend, txStream, blockStream)
 }
 
 // Utility functions
