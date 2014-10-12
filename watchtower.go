@@ -10,6 +10,7 @@
 package watchtower
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -19,37 +20,69 @@ import (
 )
 
 var btcnet btcwire.BitcoinNet
-var logger = log.New(os.Stdout, "", log.Ltime)
 
+// The meta information reported by watchtower about a transaction it has seen.
 type TxMeta struct {
 	MsgTx    *btcwire.MsgTx
 	BlockSha []byte
 	Time     time.Time
 }
 
-func nodeHandler(addr string, height int64, toSend []btcwire.Message, txStream chan<- *TxMeta, blockStream chan<- *btcwire.MsgBlock) {
-	logger.Println("Connecting to: ", addr)
-	conn := setupConn(addr)
-	pver := btcwire.ProtocolVersion
-	read, write := composeConnOuts(conn, pver, btcnet, logger)
+// The initial configuration for the watchtower instance.
+type TowerCfg struct {
+	Addr        string
+	Net         btcwire.BitcoinNet
+	StartHeight int
+	// A list of messages to send the bitcoin peer
+	ToSend []btcwire.Message
+	Logger *log.Logger
+}
+
+// Params required to construct a connection to a bitcoin peer
+type connParams struct {
+	conn net.Conn
+	// the protocol version to communicate at
+	pver   uint32
+	btcnet btcwire.BitcoinNet
+	logger *log.Logger
+	// indicates that conn is in handshake phase.
+	insetup bool
+}
+
+func nodeHandler(cfg TowerCfg, txStream chan<- *TxMeta, blockStream chan<- *btcwire.MsgBlock) {
+
+	conn := setupConn(cfg.Addr, cfg.Logger)
+
+	connparams := connParams{
+		conn:    conn,
+		pver:    btcwire.ProtocolVersion,
+		btcnet:  cfg.Net,
+		logger:  cfg.Logger,
+		insetup: true,
+	}
+
+	read, write := composeConnOuts(connparams)
 
 	// Initial handshake
-	ver_m, _ := btcwire.NewMsgVersionFromConn(conn, genNonce(), int32(height))
+	ver_m, _ := btcwire.NewMsgVersionFromConn(conn, genNonce(), int32(cfg.StartHeight))
 	ver_m.AddUserAgent("Watchtower", "0.0.0")
+
 	write(ver_m)
+
 	// Wait for responses
 	acked, responded := false, false
 	for {
 		var msg btcwire.Message
 		msg = read()
-		logger.Println(msg.Command())
+		cfg.Logger.Println(msg.Command())
 		switch msg := msg.(type) {
 		case *btcwire.MsgVersion:
 			responded = true
 			ack := btcwire.NewMsgVerAck()
 			nodeVer := uint32(msg.ProtocolVersion)
-			if nodeVer < pver {
-				read, write = composeConnOuts(conn, nodeVer, btcnet, logger)
+			if nodeVer < connparams.pver {
+				connparams.pver = nodeVer
+				read, write = composeConnOuts(connparams)
 			}
 			write(ack)
 		case *btcwire.MsgVerAck:
@@ -59,17 +92,22 @@ func nodeHandler(addr string, height int64, toSend []btcwire.Message, txStream c
 			break
 		}
 	}
-	logger.Println("Conn Negotiated")
+
+	// We are through the initial handshake, assume functional channel from here
+	// on out. If there any errors with the pipe logger.Fatal gets called.
+	connparams.insetup = false
+	read, write = composeConnOuts(connparams)
+	cfg.Logger.Println("Conn Negotiated")
 
 	// If there are msgs to send. Send them first
-	if len(toSend) > 0 {
+	if len(cfg.ToSend) > 0 {
 		s := "Sending cmds:"
-		for _, msg := range toSend {
+		for _, msg := range cfg.ToSend {
 			s += " " + msg.Command()
 		}
-		logger.Println(s)
+		cfg.Logger.Println(s)
 	}
-	for _, msg := range toSend {
+	for _, msg := range cfg.ToSend {
 		write(msg)
 	}
 
@@ -93,20 +131,19 @@ func nodeHandler(addr string, height int64, toSend []btcwire.Message, txStream c
 			blockStream <- msg
 		case *btcwire.MsgPing:
 			pong := btcwire.NewMsgPong(msg.Nonce)
+			// More fun than anything...
 			write(pong)
 		}
 	}
 }
 
-type TowerCfg struct {
-	Addr        string
-	Net         btcwire.BitcoinNet
-	StartHeight int
-	ToSend      []btcwire.Message
-}
-
 func Create(cfg TowerCfg, txParser func(*TxMeta), blockParser func(time.Time, *btcwire.MsgBlock)) {
 	btcnet = cfg.Net
+
+	if cfg.Logger == nil {
+		// if no logger is present, create one and pass it into our config
+		cfg.Logger = log.New(os.Stdout, "", log.Ltime)
+	}
 
 	txStream := make(chan *TxMeta, 5e3)
 	blockStream := make(chan *btcwire.MsgBlock)
@@ -115,28 +152,50 @@ func Create(cfg TowerCfg, txParser func(*TxMeta), blockParser func(time.Time, *b
 
 	go txParserWrapper(txParser, txStream)
 
-	nodeHandler(cfg.Addr, int64(cfg.StartHeight), cfg.ToSend, txStream, blockStream)
+	nodeHandler(cfg, txStream, blockStream)
 }
 
 // Utility functions
-func setupConn(addr string) net.Conn {
+
+// Dials a Bitcoin server over tcp, times out in .5 seconds
+func setupConn(addr string, logger *log.Logger) net.Conn {
+
+	logger.Println("Connecting to:", addr)
 	conn, err := net.DialTimeout("tcp", addr, time.Millisecond*500)
 	if err != nil {
-		logger.Fatal(err, "Could not connect to "+addr)
+		logger.Fatalf(fmt.Sprintf("%v, could not connect to %s", err, addr))
 	}
 	return conn
 }
 
-func composeConnOuts(conn net.Conn, pver uint32, btcnet btcwire.BitcoinNet, logger *log.Logger) (func() btcwire.Message, func(btcwire.Message)) {
+// Creates the reading and writing interfaces used to send and recieve messages
+// from a Bitcoin peer. inSetup indicates the verbosity of the failure mode.
+func composeConnOuts(params connParams) (func() btcwire.Message, func(btcwire.Message)) {
+
+	conn := params.conn
+	logger := params.logger
+
+	failmsg := fmt.Sprintf(
+		"The Bitcoin server has reached its max peers and does not want to talk at %s",
+		conn.RemoteAddr(),
+	)
+
 	read := func() btcwire.Message {
-		msg, _, err := btcwire.ReadMessage(conn, pver, btcnet)
+		msg, _, err := btcwire.ReadMessage(conn, params.pver, params.btcnet)
+		// a Bitcoin node will typically send a TCP RST if it doesn't want to talk
+		if params.insetup && err != nil {
+			logger.Printf(failmsg)
+		}
 		if err != nil {
 			logger.Fatal(err)
 		}
 		return msg
 	}
 	write := func(msg btcwire.Message) {
-		err := btcwire.WriteMessage(conn, msg, pver, btcnet)
+		err := btcwire.WriteMessage(conn, msg, params.pver, params.btcnet)
+		if params.insetup && err != nil {
+			logger.Printf(failmsg)
+		}
 		if err != nil {
 			logger.Fatal(err)
 		}
