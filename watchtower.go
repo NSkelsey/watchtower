@@ -175,10 +175,7 @@ func composeConnOuts(params connParams) (func() btcwire.Message, func(btcwire.Me
 	conn := params.conn
 	logger := params.logger
 
-	failmsg := fmt.Sprintf(
-		"The Bitcoin server has reached its max peers and does not want to talk at %s",
-		conn.RemoteAddr(),
-	)
+	failmsg := "The Bitcoin server has reached its max peers and does not want to talk"
 
 	read := func() btcwire.Message {
 		msg, _, err := btcwire.ReadMessage(conn, params.pver, params.btcnet)
