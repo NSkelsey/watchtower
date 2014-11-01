@@ -33,9 +33,9 @@ type TowerCfg struct {
 	Addr        string
 	Net         btcwire.BitcoinNet
 	StartHeight int
-	// A list of messages to send the bitcoin peer
-	ToSend []btcwire.Message
-	Logger *log.Logger
+	// A rhannel for the application to push messages into
+	MsgChan chan btcwire.Message
+	Logger  *log.Logger
 }
 
 // Params required to construct a connection to a bitcoin peer
@@ -99,40 +99,34 @@ func nodeHandler(cfg TowerCfg, txStream chan<- *TxMeta, blockStream chan<- *btcw
 	read, write = composeConnOuts(connparams)
 	cfg.Logger.Println("Conn Negotiated")
 
-	// If there are msgs to send. Send them first
-	if len(cfg.ToSend) > 0 {
-		s := "Sending cmds:"
-		for _, msg := range cfg.ToSend {
-			s += " " + msg.Command()
-		}
-		cfg.Logger.Println(s)
-	}
-	for _, msg := range cfg.ToSend {
-		write(msg)
-	}
-
-	// listen for txs + blocks then pushes into streams
 	for {
-		msg := read()
-		switch msg := msg.(type) {
-		case *btcwire.MsgInv:
-			want := btcwire.NewMsgGetData()
-			invVec := msg.InvList
-			for i := range invVec {
-				chunk := invVec[i]
-				want.AddInvVect(chunk)
+		// If there are messages to send to peers send them. Otherwise, listen!
+		select {
+		case msg := <-cfg.MsgChan:
+			write(msg)
+		default:
+			// listen for txs + blocks then push them into the appropriatestreams
+			msg := read()
+			switch msg := msg.(type) {
+			case *btcwire.MsgInv:
+				want := btcwire.NewMsgGetData()
+				invVec := msg.InvList
+				for i := range invVec {
+					chunk := invVec[i]
+					want.AddInvVect(chunk)
+				}
+				write(want)
+			case *btcwire.MsgTx:
+				var empt []byte // evaluates to nil
+				meta := TxMeta{MsgTx: msg, BlockSha: empt, Time: time.Now()}
+				txStream <- &meta
+			case *btcwire.MsgBlock:
+				blockStream <- msg
+			case *btcwire.MsgPing:
+				pong := btcwire.NewMsgPong(msg.Nonce)
+				// More fun than anything...
+				write(pong)
 			}
-			write(want)
-		case *btcwire.MsgTx:
-			var empt []byte // evaluates to nil
-			meta := TxMeta{MsgTx: msg, BlockSha: empt, Time: time.Now()}
-			txStream <- &meta
-		case *btcwire.MsgBlock:
-			blockStream <- msg
-		case *btcwire.MsgPing:
-			pong := btcwire.NewMsgPong(msg.Nonce)
-			// More fun than anything...
-			write(pong)
 		}
 	}
 }
